@@ -165,7 +165,9 @@ impl App {
         on_desktop: bool,
     ) {
         tracing::info!(%to, landed = landed.len(), "shell drop finished");
-        if on_desktop && landed.is_empty() {
+        if on_desktop && needs_shell_drop_claim(&landed) {
+            // Descriptor names can be speculative: Start writes a differently named shortcut
+            // after Drop returns. A nonempty list is not proof that a file has landed.
             // Some drops are written only after `Drop` returned (the shortcut to This PC or the
             // Recycle Bin dragged off the Windows desktop): claim those, see `on_fs_changed`.
             self.shell_drop_claim = Some((to, Instant::now()));
@@ -247,5 +249,29 @@ impl App {
                 }
             }
         }
+    }
+}
+
+// Shell descriptor names describe expected files, not necessarily the paths Windows writes.
+fn needs_shell_drop_claim(landed: &[PathBuf]) -> bool {
+    !landed.iter().any(|path| path.exists())
+}
+
+#[cfg(test)]
+mod shell_drop_tests {
+    use super::*;
+
+    #[test]
+    fn speculative_descriptor_does_not_disable_delayed_shortcut_claim() {
+        let dir = std::env::temp_dir().join(format!("pecofence-drop-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let described = dir.join("Application");
+        let actual = dir.join("Application - Shortcut.lnk");
+        assert!(needs_shell_drop_claim(&[]));
+        assert!(needs_shell_drop_claim(&[described.clone()]));
+        std::fs::write(&actual, b"test shortcut").unwrap();
+        assert!(!needs_shell_drop_claim(&[actual.clone(), described]));
+        std::fs::remove_file(actual).unwrap();
+        std::fs::remove_dir(dir).unwrap();
     }
 }
